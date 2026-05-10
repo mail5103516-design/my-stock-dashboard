@@ -2,12 +2,10 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
-import os
 import re
 
 # --- 設定と定数 ---
 st.set_page_config(page_title="ポートフォリオ・ダッシュボード", layout="wide")
-PORTFOLIO_FILE = "my_saved_portfolio.csv"
 
 # --- 1. ティッカー抽出ロジック ---
 def extract_ticker(item_name, item_type):
@@ -36,8 +34,8 @@ def is_noise(item_name, item_type):
         return True
     return False
 
-# --- 2. CSVパース ---
-def parse_and_save_csv(uploaded_file):
+# --- 2. CSVパース (メモリ上で処理し、ファイル保存しない) ---
+def parse_csv_to_dataframe(uploaded_file):
     encodings = ['utf-8', 'utf-8-sig', 'cp932', 'shift_jis']
     df = None
     for enc in encodings:
@@ -56,7 +54,6 @@ def parse_and_save_csv(uploaded_file):
             continue
     if df is None or df.empty:
         raise ValueError("ファイルの読み込みに失敗しました。")
-    df.to_csv(PORTFOLIO_FILE, index=False, encoding='utf-8-sig')
     return df
 
 # --- 3. 株価・指標の取得 ---
@@ -200,47 +197,31 @@ def build_chart(ticker, name):
 # --- 5. UI構築 ---
 st.title("📊 ポートフォリオ・モニター")
 
-if 'display_data'   not in st.session_state: st.session_state['display_data']   = None
-if 'chart_ticker'   not in st.session_state: st.session_state['chart_ticker']   = None
-if 'chart_name'     not in st.session_state: st.session_state['chart_name']     = None
+# セッション状態の初期化
+if 'base_df'       not in st.session_state: st.session_state['base_df']       = None
+if 'display_data'  not in st.session_state: st.session_state['display_data']  = None
+if 'chart_ticker'  not in st.session_state: st.session_state['chart_ticker']  = None
+if 'chart_name'    not in st.session_state: st.session_state['chart_name']    = None
 
-# 起動時の自動読み込み
-base_df = None
-if os.path.exists(PORTFOLIO_FILE):
-    if os.path.getsize(PORTFOLIO_FILE) > 0:
-        try:
-            base_df = pd.read_csv(PORTFOLIO_FILE, encoding='utf-8-sig')
-            st.success("✅ 保存されたポートフォリオを読み込みました。")
-        except pd.errors.EmptyDataError:
-            st.warning("⚠️ 保存されたファイルが破損しています。再度CSVをアップロードしてください。")
-            os.remove(PORTFOLIO_FILE)
-        except Exception as e:
-            st.warning(f"⚠️ データの読み込みに失敗しました。（詳細: {e}）")
-    else:
-        st.warning("⚠️ 保存されたファイルが空です。再度CSVをアップロードしてください。")
-        os.remove(PORTFOLIO_FILE)
-else:
-    st.warning("⚠️ ポートフォリオが登録されていません。下のメニューからCSVをアップロードしてください。")
-
-with st.expander("📁 ポートフォリオの新規登録 / 上書き更新"):
-    st.info("楽天証券のCSV、または自作のCSVをアップロードすると、内部データが上書き保存されます。")
+with st.expander("📁 ポートフォリオのアップロード", expanded=st.session_state['base_df'] is None):
+    st.info("※データはブラウザを閉じると消去されます。サーバーには保存されないため安全です。")
     uploaded_file = st.file_uploader("CSVをアップロード", type=['csv'])
     if uploaded_file is not None:
         try:
-            base_df = parse_and_save_csv(uploaded_file)
-            st.success("ポートフォリオデータをシステムに保存しました！次回以降はアップロード不要です。")
-            st.rerun()
+            # ファイルに保存せず、メモリ（session_state）に保持する
+            st.session_state['base_df'] = parse_csv_to_dataframe(uploaded_file)
+            st.success("✅ データを読み込みました！")
         except Exception as e:
             st.error(f"エラー: {e}")
 
 # 更新ボタン
-if base_df is not None:
+if st.session_state['base_df'] is not None:
     st.markdown("---")
     col1, col2 = st.columns([1, 3])
     with col1:
         if st.button("🔄 最新の株価・指標を取得", type="primary", use_container_width=True):
             with st.spinner("データを取得中..."):
-                st.session_state['display_data'] = fetch_portfolio_metrics(base_df)
+                st.session_state['display_data'] = fetch_portfolio_metrics(st.session_state['base_df'])
                 st.session_state['chart_ticker'] = None  # チャートリセット
 
 # テーブル表示
@@ -266,7 +247,7 @@ if st.session_state['display_data'] is not None:
             st.dataframe(filtered_df, use_container_width=True,
                          hide_index=True, column_config=view_config)
             st.markdown("**📈 チャートを表示する銘柄を選択：**")
-            cols = st.columns(min(len(filtered_df), 6))
+            cols = st.columns(min(max(len(filtered_df), 1), 6))
             for i, (_, row) in enumerate(filtered_df.iterrows()):
                 with cols[i % 6]:
                     label = str(row['コード']).split('.')[0]
