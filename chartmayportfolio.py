@@ -34,7 +34,7 @@ def is_noise(item_name, item_type):
         return True
     return False
 
-# --- 2. CSVパース (メモリ上で処理し、ファイル保存しない) ---
+# --- 2. CSVパース ---
 def parse_csv_to_dataframe(uploaded_file):
     encodings = ['utf-8', 'utf-8-sig', 'cp932', 'shift_jis']
     df = None
@@ -64,7 +64,7 @@ def fetch_portfolio_metrics(df):
     else: ticker_col = df.columns[1]
     if '銘柄' in df.columns: name_col = '銘柄'
     else: name_col = ticker_col
-    qty_col   = '保有数量'    if '保有数量'    in df.columns else df.columns[2]
+    qty_col = '保有数量' if '保有数量' in df.columns else df.columns[2]
     if '平均取得単価' in df.columns:   price_col = '平均取得単価'
     elif '平均取得価額' in df.columns: price_col = '平均取得価額'
     else: price_col = df.columns[3]
@@ -83,10 +83,16 @@ def fetch_portfolio_metrics(df):
             try:
                 stock = yf.Ticker(ticker)
                 info  = stock.info
-                current_price = info.get('currentPrice', info.get('regularMarketPrice', None))
+                hist  = stock.history(period="1y")
+
+                # ✅ 現在値：info → 履歴の最終終値 の順でフォールバック
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                if not current_price and not hist.empty:
+                    current_price = float(hist['Close'].iloc[-1])
+
                 eps = info.get('trailingEps', None)
                 per = info.get('trailingPE',  None)
-                hist = stock.history(period="1y")
+
                 if not hist.empty:
                     ma20  = hist['Close'].rolling(window=20).mean().iloc[-1]
                     ma50  = hist['Close'].rolling(window=50).mean().iloc[-1]
@@ -97,11 +103,12 @@ def fetch_portfolio_metrics(df):
                         elif current_price < ma20 < ma50 < ma200: state = "🧊 下降PO"
                 else:
                     ma20, ma50, ma200, state = None, None, None, "-"
+
                 metrics_list.append({
                     '検索用ティッカー': ticker,
                     '最新価格': round(current_price, 2) if current_price else None,
-                    'EPS': round(eps, 2) if eps else None,
-                    'PER': round(per, 2) if per else None,
+                    'EPS':  round(eps,  2) if eps  else None,
+                    'PER':  round(per,  2) if per  else None,
                     '20MA':  round(ma20,  2) if ma20  else None,
                     '50MA':  round(ma50,  2) if ma50  else None,
                     '200MA': round(ma200, 2) if ma200 else None,
@@ -144,7 +151,6 @@ def build_chart(ticker, name):
         hist['MA50']  = hist['Close'].rolling(50).mean()
         hist['MA200'] = hist['Close'].rolling(200).mean()
 
-        # フィボナッチ（直近60日）
         recent   = hist.tail(60)
         hi_fib   = float(recent['High'].max())
         lo_fib   = float(recent['Low'].min())
@@ -163,8 +169,6 @@ def build_chart(ticker, name):
         }
 
         fig = go.Figure()
-
-        # ローソク足
         fig.add_trace(go.Candlestick(
             x=recent.index,
             open=recent['Open'], high=recent['High'],
@@ -173,13 +177,10 @@ def build_chart(ticker, name):
             increasing_line_color="#26a69a", increasing_fillcolor="#26a69a",
             decreasing_line_color="#ef5350", decreasing_fillcolor="#ef5350",
         ))
-
-        # MA
         fig.add_trace(go.Scatter(x=recent.index, y=recent['MA20'],  name="20MA",  line=dict(color='#f5a623', width=1.5)))
         fig.add_trace(go.Scatter(x=recent.index, y=recent['MA50'],  name="50MA",  line=dict(color='#1a73e8', width=3)))
         fig.add_trace(go.Scatter(x=recent.index, y=recent['MA200'], name="200MA", line=dict(color='#e53935', width=1.5)))
 
-        # フィボナッチ水平線
         for label, val in fib_levels.items():
             fig.add_hline(y=val, line_dash="dot", line_color="gray",
                           annotation_text=label, annotation_position="right")
@@ -197,24 +198,21 @@ def build_chart(ticker, name):
 # --- 5. UI構築 ---
 st.title("📊 ポートフォリオ・モニター")
 
-# セッション状態の初期化
-if 'base_df'       not in st.session_state: st.session_state['base_df']       = None
-if 'display_data'  not in st.session_state: st.session_state['display_data']  = None
-if 'chart_ticker'  not in st.session_state: st.session_state['chart_ticker']  = None
-if 'chart_name'    not in st.session_state: st.session_state['chart_name']    = None
+if 'base_df'      not in st.session_state: st.session_state['base_df']      = None
+if 'display_data' not in st.session_state: st.session_state['display_data'] = None
+if 'chart_ticker' not in st.session_state: st.session_state['chart_ticker'] = None
+if 'chart_name'   not in st.session_state: st.session_state['chart_name']   = None
 
 with st.expander("📁 ポートフォリオのアップロード", expanded=st.session_state['base_df'] is None):
     st.info("※データはブラウザを閉じると消去されます。サーバーには保存されないため安全です。")
     uploaded_file = st.file_uploader("CSVをアップロード", type=['csv'])
     if uploaded_file is not None:
         try:
-            # ファイルに保存せず、メモリ（session_state）に保持する
             st.session_state['base_df'] = parse_csv_to_dataframe(uploaded_file)
             st.success("✅ データを読み込みました！")
         except Exception as e:
             st.error(f"エラー: {e}")
 
-# 更新ボタン
 if st.session_state['base_df'] is not None:
     st.markdown("---")
     col1, col2 = st.columns([1, 3])
@@ -222,9 +220,8 @@ if st.session_state['base_df'] is not None:
         if st.button("🔄 最新の株価・指標を取得", type="primary", use_container_width=True):
             with st.spinner("データを取得中..."):
                 st.session_state['display_data'] = fetch_portfolio_metrics(st.session_state['base_df'])
-                st.session_state['chart_ticker'] = None  # チャートリセット
+                st.session_state['chart_ticker'] = None
 
-# テーブル表示
 if st.session_state['display_data'] is not None:
     st.markdown("### 最新ステータス")
     df = st.session_state['display_data']
@@ -259,7 +256,6 @@ if st.session_state['display_data'] is not None:
     render_table_with_chart_buttons(tab2, df[df['種別'].str.contains('日本|国内|信用', na=False, regex=True)])
     render_table_with_chart_buttons(tab3, df[df['種別'].str.contains('米国', na=False, regex=True)])
 
-    # チャート表示エリア
     if st.session_state['chart_ticker']:
         st.markdown("---")
         st.markdown(f"### 📊 {st.session_state['chart_name']}（{st.session_state['chart_ticker']}）")
