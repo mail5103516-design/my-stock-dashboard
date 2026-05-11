@@ -85,8 +85,14 @@ def fetch_portfolio_metrics(df):
                 info  = stock.info
                 hist  = stock.history(period="1y")
 
-                # ✅ 現在値：info → 履歴の最終終値 の順でフォールバック
-                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                # ✅ 現在値：fast_info → info → 履歴終値 の順でフォールバック
+                current_price = None
+                try:
+                    current_price = stock.fast_info.last_price
+                except Exception:
+                    pass
+                if not current_price:
+                    current_price = info.get('currentPrice') or info.get('regularMarketPrice')
                 if not current_price and not hist.empty:
                     current_price = float(hist['Close'].iloc[-1])
 
