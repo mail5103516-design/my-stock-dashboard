@@ -60,14 +60,14 @@ def parse_csv_to_dataframe(uploaded_file):
 def fetch_portfolio_metrics(df):
     type_col = '種別' if '種別' in df.columns else df.columns[0]
     if '銘柄コード・ティッカー' in df.columns: ticker_col = '銘柄コード・ティッカー'
-    elif '銘柄名/ティッカー' in df.columns: ticker_col = '銘柄名/ティッカー'
-    else: ticker_col = df.columns[1]
+    elif '銘柄名/ティッカー' in df.columns:    ticker_col = '銘柄名/ティッカー'
+    else:                                        ticker_col = df.columns[1]
     if '銘柄' in df.columns: name_col = '銘柄'
-    else: name_col = ticker_col
+    else:                     name_col = ticker_col
     qty_col = '保有数量' if '保有数量' in df.columns else df.columns[2]
     if '平均取得単価' in df.columns:   price_col = '平均取得単価'
     elif '平均取得価額' in df.columns: price_col = '平均取得価額'
-    else: price_col = df.columns[3]
+    else:                              price_col = df.columns[3]
 
     filtered_df = df[~df.apply(lambda row: is_noise(row[ticker_col], row[type_col]), axis=1)].copy()
     filtered_df['検索用ティッカー'] = filtered_df.apply(
@@ -76,7 +76,8 @@ def fetch_portfolio_metrics(df):
 
     metrics_list = []
     if not valid_tickers:
-        metrics_df = pd.DataFrame(columns=['検索用ティッカー','最新価格','EPS','PER','20MA','50MA','200MA','状態'])
+        metrics_df = pd.DataFrame(columns=[
+            '検索用ティッカー','最新価格','前日比','EPS','PER','20MA','50MA','200MA','状態'])
     else:
         progress_bar = st.progress(0)
         for i, ticker in enumerate(valid_tickers):
@@ -85,7 +86,7 @@ def fetch_portfolio_metrics(df):
                 info  = stock.info
                 hist  = stock.history(period="1y")
 
-                # ✅ 現在値：fast_info → info → 履歴終値 の順でフォールバック
+                # 現在値：fast_info → info → 履歴終値
                 current_price = None
                 try:
                     current_price = stock.fast_info.last_price
@@ -95,6 +96,16 @@ def fetch_portfolio_metrics(df):
                     current_price = info.get('currentPrice') or info.get('regularMarketPrice')
                 if not current_price and not hist.empty:
                     current_price = float(hist['Close'].iloc[-1])
+
+                # 前日比：fast_info → info
+                prev_close = None
+                try:
+                    prev_close = stock.fast_info.previous_close
+                except Exception:
+                    pass
+                if not prev_close:
+                    prev_close = info.get('previousClose')
+                change = round(current_price - prev_close, 2) if current_price and prev_close else None
 
                 eps = info.get('trailingEps', None)
                 per = info.get('trailingPE',  None)
@@ -113,16 +124,20 @@ def fetch_portfolio_metrics(df):
                 metrics_list.append({
                     '検索用ティッカー': ticker,
                     '最新価格': round(current_price, 2) if current_price else None,
-                    'EPS':  round(eps,  2) if eps  else None,
-                    'PER':  round(per,  2) if per  else None,
-                    '20MA':  round(ma20,  2) if ma20  else None,
-                    '50MA':  round(ma50,  2) if ma50  else None,
-                    '200MA': round(ma200, 2) if ma200 else None,
-                    '状態': state
+                    '前日比':   change,
+                    'EPS':      round(eps,  2) if eps  else None,
+                    'PER':      round(per,  2) if per  else None,
+                    '20MA':     round(ma20,  2) if ma20  else None,
+                    '50MA':     round(ma50,  2) if ma50  else None,
+                    '200MA':    round(ma200, 2) if ma200 else None,
+                    '状態':     state
                 })
             except Exception:
-                metrics_list.append({'検索用ティッカー': ticker, '最新価格': None,
-                    'EPS': None, 'PER': None, '20MA': None, '50MA': None, '200MA': None, '状態': "エラー"})
+                metrics_list.append({
+                    '検索用ティッカー': ticker, '最新価格': None, '前日比': None,
+                    'EPS': None, 'PER': None, '20MA': None, '50MA': None,
+                    '200MA': None, '状態': "エラー"
+                })
             progress_bar.progress((i + 1) / len(valid_tickers))
         progress_bar.empty()
         metrics_df = pd.DataFrame(metrics_list)
@@ -135,6 +150,7 @@ def fetch_portfolio_metrics(df):
     display_df['数量']       = merged_df[qty_col]
     display_df['取得単価']   = merged_df[price_col]
     display_df['現在値']     = merged_df['最新価格']
+    display_df['前日比']     = merged_df['前日比']
     display_df['EPS']        = merged_df['EPS']
     display_df['PER']        = merged_df['PER']
     display_df['20MA']       = merged_df['20MA']
@@ -144,6 +160,16 @@ def fetch_portfolio_metrics(df):
     display_df['種別']       = merged_df[type_col]
     display_df['ティッカー'] = merged_df['検索用ティッカー']
     return display_df
+
+# --- 前日比の色付け ---
+def color_change(val):
+    if pd.isna(val) or val is None:
+        return ''
+    if val > 0:
+        return 'color: #1a73e8; font-weight: bold'   # 青
+    elif val < 0:
+        return 'color: #ef5350; font-weight: bold'   # 赤
+    return ''
 
 # --- 4. チャート生成（MA + フィボナッチ）---
 def build_chart(ticker, name):
@@ -232,23 +258,25 @@ if st.session_state['display_data'] is not None:
     st.markdown("### 最新ステータス")
     df = st.session_state['display_data']
 
-    view_config = {
-        "種別":       None,
-        "ティッカー": None,
-        "コード":     st.column_config.TextColumn("コード",   width="small"),
-        "銘柄名":     st.column_config.TextColumn("銘柄名",   width="medium"),
-        "現在値":     st.column_config.NumberColumn("現在値", format="%.2f"),
-        "EPS":        st.column_config.NumberColumn("EPS",    format="%.2f"),
-        "PER":        st.column_config.NumberColumn("PER",    format="%.1f"),
-        "トレンド":   st.column_config.TextColumn("トレンド", width="small"),
+    # 非表示列の設定
+    hide_cols = {"種別": None, "ティッカー": None}
+    col_config = {
+        **hide_cols,
+        "コード":   st.column_config.TextColumn("コード",   width="small"),
+        "銘柄名":   st.column_config.TextColumn("銘柄名",   width="medium"),
+        "現在値":   st.column_config.NumberColumn("現在値", format="%.2f"),
+        "前日比":   st.column_config.NumberColumn("前日比", format="%.2f"),
+        "EPS":      st.column_config.NumberColumn("EPS",    format="%.2f"),
+        "PER":      st.column_config.NumberColumn("PER",    format="%.1f"),
+        "トレンド": st.column_config.TextColumn("トレンド", width="small"),
     }
-
-    tab1, tab2, tab3 = st.tabs(["🌐 すべて", "🇯🇵 日本株", "🇺🇸 米国株"])
 
     def render_table_with_chart_buttons(tab, filtered_df):
         with tab:
-            st.dataframe(filtered_df, use_container_width=True,
-                         hide_index=True, column_config=view_config)
+            # 前日比に色付けして表示
+            styled = filtered_df.style.map(color_change, subset=['前日比'])
+            st.dataframe(styled, use_container_width=True,
+                         hide_index=True, column_config=col_config)
             st.markdown("**📈 チャートを表示する銘柄を選択：**")
             cols = st.columns(min(max(len(filtered_df), 1), 6))
             for i, (_, row) in enumerate(filtered_df.iterrows()):
@@ -258,6 +286,7 @@ if st.session_state['display_data'] is not None:
                         st.session_state['chart_ticker'] = row['ティッカー']
                         st.session_state['chart_name']   = row['銘柄名']
 
+    tab1, tab2, tab3 = st.tabs(["🌐 すべて", "🇯🇵 日本株", "🇺🇸 米国株"])
     render_table_with_chart_buttons(tab1, df)
     render_table_with_chart_buttons(tab2, df[df['種別'].str.contains('日本|国内|信用', na=False, regex=True)])
     render_table_with_chart_buttons(tab3, df[df['種別'].str.contains('米国', na=False, regex=True)])
