@@ -77,7 +77,7 @@ def fetch_portfolio_metrics(df):
     metrics_list = []
     if not valid_tickers:
         metrics_df = pd.DataFrame(columns=[
-            '検索用ティッカー','最新価格','前日比','EPS','PER','20MA','50MA','200MA','状態'])
+            '検索用ティッカー','最新価格','API前日比','EPS','PER','20MA','50MA','200MA','状態'])
     else:
         progress_bar = st.progress(0)
         for i, ticker in enumerate(valid_tickers):
@@ -124,7 +124,7 @@ def fetch_portfolio_metrics(df):
                 metrics_list.append({
                     '検索用ティッカー': ticker,
                     '最新価格': round(current_price, 2) if current_price else None,
-                    '前日比':   change,
+                    'API前日比': change,
                     'EPS':      round(eps,  2) if eps  else None,
                     'PER':      round(per,  2) if per  else None,
                     '20MA':     round(ma20,  2) if ma20  else None,
@@ -134,13 +134,17 @@ def fetch_portfolio_metrics(df):
                 })
             except Exception:
                 metrics_list.append({
-                    '検索用ティッカー': ticker, '最新価格': None, '前日比': None,
+                    '検索用ティッカー': ticker, '最新価格': None, 'API前日比': None,
                     'EPS': None, 'PER': None, '20MA': None, '50MA': None,
                     '200MA': None, '状態': "エラー"
                 })
             progress_bar.progress((i + 1) / len(valid_tickers))
         progress_bar.empty()
         metrics_df = pd.DataFrame(metrics_list)
+        # 列が欠けていた場合に備えてNoneで補完
+        for col in ['最新価格','API前日比','EPS','PER','20MA','50MA','200MA','状態']:
+            if col not in metrics_df.columns:
+                metrics_df[col] = None
 
     merged_df = pd.merge(filtered_df, metrics_df, on='検索用ティッカー', how='left')
 
@@ -150,7 +154,7 @@ def fetch_portfolio_metrics(df):
     display_df['数量']       = merged_df[qty_col]
     display_df['取得単価']   = merged_df[price_col]
     display_df['現在値']     = merged_df['最新価格']
-    display_df['前日比']     = merged_df['前日比']
+    display_df['前日比']     = merged_df['API前日比'] if 'API前日比' in merged_df.columns else None
     display_df['EPS']        = merged_df['EPS']
     display_df['PER']        = merged_df['PER']
     display_df['20MA']       = merged_df['20MA']
