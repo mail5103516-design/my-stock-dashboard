@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import re
+from datetime import datetime
 
 # --- 設定と定数 ---
 st.set_page_config(page_title="ポートフォリオ・ダッシュボード", layout="wide")
@@ -83,8 +84,9 @@ def fetch_portfolio_metrics(df):
         for i, ticker in enumerate(valid_tickers):
             try:
                 stock = yf.Ticker(ticker)
+                stock._history = None  # キャッシュクリア
                 info  = stock.info
-                hist  = stock.history(period="1y")
+                hist  = stock.history(period="1y", auto_adjust=True)
 
                 # 現在値：fast_info → info → 履歴終値
                 current_price = None
@@ -255,6 +257,8 @@ if st.session_state['base_df'] is not None:
     with col1:
         if st.button("🔄 最新の株価・指標を取得", type="primary", use_container_width=True):
             with st.spinner("データを取得中..."):
+                # yfinanceの内部キャッシュをクリアして必ず最新データを取得
+                yf.set_tz_cache_location(None)
                 st.session_state['display_data'] = fetch_portfolio_metrics(st.session_state['base_df'])
                 st.session_state['chart_ticker'] = None
 
